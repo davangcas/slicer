@@ -1,0 +1,8 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8050:8050"
+    env_file:
+      - path: .env
+        required: false
