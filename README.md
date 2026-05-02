@@ -28,9 +28,36 @@ API HTTP en **FastAPI** que estima **tiempo de impresión** (horas y minutos) y 
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| `GET` | `/health` | Comprobación simple (`{"status":"ok"}`). |
-| `GET` | `/machines` | Lista definiciones de máquina Cura disponibles (`id`, `name`). |
-| `POST` | `/estimate` | Sube modelo + material (+ máquina opcional); devuelve estimación. |
+| `GET` | `/health` | Comprobación simple (`{"status":"ok"}`). Sin autenticación. |
+| `POST` | `/oauth/token` | OAuth 2.0 **client credentials** (RFC 6749 §4.4): devuelve `access_token` JWT. Solo si `API_AUTH_ENABLED=true`. |
+| `GET` | `/machines` | Lista definiciones de máquina Cura disponibles (`id`, `name`). Con auth activada: cabecera `Authorization: Bearer <token>`. |
+| `POST` | `/estimate` | Sube modelo + material (+ máquina opcional); devuelve estimación. Con auth activada: `Bearer`. |
+
+### Autenticación (OAuth2 client credentials)
+
+Con **`API_AUTH_ENABLED=true`** debes definir **`OAUTH_JWT_SECRET`** (secreto para firmar JWT; usa un valor largo y aleatorio) y al menos un cliente:
+
+- **`OAUTH_CLIENT_ID`** y **`OAUTH_CLIENT_SECRET`**, o
+- **`OAUTH_CLIENTS_JSON`**: objeto JSON `{"client_id":"client_secret", ...}`.
+
+1. Obtener token (`application/x-www-form-urlencoded`):
+
+   ```bash
+   curl -sS -X POST http://localhost:8050/oauth/token \
+     -H 'Content-Type: application/x-www-form-urlencoded' \
+     -d 'grant_type=client_credentials&client_id=client-id&client_secret=client-secret'
+   ```
+
+2. Llamar a la API con el JWT:
+
+   ```bash
+   TOKEN=...   # access_token de la respuesta anterior
+   curl -sS -H "Authorization: Bearer $TOKEN" http://localhost:8050/machines
+   ```
+
+Con **`API_AUTH_ENABLED=false`** (por defecto) el comportamiento es el anterior: `/machines` y `/estimate` no exigen cabecera. El arranque falla si activas auth pero faltan secreto JWT o clientes configurados.
+
+En **OpenAPI** (`/docs`) aparece el esquema *OAuth2ClientCredentials* para autorizar peticiones protegidas.
 
 ### `POST /estimate`
 
@@ -66,6 +93,12 @@ Definidas en [`.env.example`](.env.example); el proceso las lee en tiempo de eje
 
 | Variable | Rol |
 |----------|-----|
+| `API_AUTH_ENABLED` | `true` para exigir JWT en `/machines` y `/estimate` (por defecto `false`). |
+| `OAUTH_JWT_SECRET` | Secreto HMAC para firmar access tokens (obligatorio si auth activa). |
+| `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` | Par cliente/servidor para el flujo client credentials. |
+| `OAUTH_CLIENTS_JSON` | Alternativa: varios clientes en un único JSON. |
+| `OAUTH_ACCESS_TOKEN_EXPIRE_MINUTES` | Caducidad del access token (por defecto `60`). |
+| `API_RATE_LIMIT_TOKEN` | Límite slowapi para `POST /oauth/token` (por defecto `30/minute`). |
 | `SLICE_TIMEOUT` | Segundos máximos por invocación a CuraEngine (por defecto `600`). |
 | `CURA_ENGINE_BIN` | Ejecutable de CuraEngine (por defecto `CuraEngine`). |
 | `CURA_MACHINE_DEF` | Ruta al `.def.json` por defecto cuando no se envía `machine` en `/estimate`. |
@@ -82,6 +115,7 @@ En la imagen Docker, los recursos de definiciones se copian bajo `/opt/cura/reso
 ## Estructura del repositorio
 
 - `app/main.py` — Rutas FastAPI.
+- `app/auth.py` — OAuth2 client credentials y validación de JWT.
 - `app/slicer_service.py` — Invocación a CuraEngine y parseo de resultados.
 - `app/machines.py` — Catálogo de máquinas y resolución de rutas `-j`.
 - `Dockerfile` / `docker-compose.yml` — Imagen Debian Bookworm con `cura-engine` y recursos Cura extraídos del paquete `cura`.

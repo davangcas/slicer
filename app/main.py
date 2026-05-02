@@ -3,14 +3,25 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from app.auth import (
+    AuthSettings,
+    TokenResponse,
+    create_access_token,
+    load_auth_settings,
+    require_access_token,
+    validate_auth_at_startup,
+    verify_client,
+)
 from app.machines import list_machine_profiles
 from app.slicer_service import estimate_print, supported_materials
 
@@ -38,14 +49,59 @@ limiter = Limiter(
     enabled=_RL_ENABLED,
 )
 
-app = FastAPI(title="Slicer estimate API", version="1.0.0")
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
 _RL_MACHINES = os.getenv("API_RATE_LIMIT_MACHINES", "60/minute")
 _RL_ESTIMATE = os.getenv("API_RATE_LIMIT_ESTIMATE", "15/minute")
+_RL_TOKEN = os.getenv("API_RATE_LIMIT_TOKEN", "30/minute")
 
 _ALLOWED_EXT = frozenset({".stl", ".obj"})
+
+_OAUTH_SECURITY = [{"OAuth2ClientCredentials": []}]
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    settings = load_auth_settings()
+    validate_auth_at_startup(settings)
+    app.state.auth_settings = settings
+    yield
+
+
+def _build_openapi_schema() -> dict:
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+        description=app.description,
+    )
+    components = openapi_schema.setdefault("components", {})
+    schemes = components.setdefault("securitySchemes", {})
+    schemes["OAuth2ClientCredentials"] = {
+        "type": "oauth2",
+        "flows": {
+            "clientCredentials": {
+                "tokenUrl": "/oauth/token",
+                "scopes": {},
+            }
+        },
+    }
+    return openapi_schema
+
+
+def custom_openapi() -> dict:
+    if app.openapi_schema is not None:
+        return app.openapi_schema
+    app.openapi_schema = _build_openapi_schema()
+    return app.openapi_schema
+
+
+app = FastAPI(
+    title="Slicer estimate API",
+    version="1.0.0",
+    lifespan=_lifespan,
+)
+app.openapi = custom_openapi  # type: ignore[method-assign]
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 class EstimateResponse(BaseModel):
@@ -65,7 +121,56 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/machines", response_model=list[MachineProfile])
+@app.post(
+    "/oauth/token",
+    response_model=TokenResponse,
+    summary="OAuth2 token (client credentials)",
+    openapi_extra={"security": []},
+)
+@limiter.limit(_RL_TOKEN)
+async def oauth_token(
+    request: Request,
+    grant_type: str = Form(..., description="Must be client_credentials"),
+    client_id: str = Form(...),
+    client_secret: str = Form(...),
+) -> TokenResponse:
+    """Issue a JWT access token for machine-to-machine access (RFC 6749 §4.4)."""
+    settings: AuthSettings = request.app.state.auth_settings
+    if not settings.enabled:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "API authentication is not enabled",
+            },
+        )
+    if grant_type.strip() != "client_credentials":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "unsupported_grant_type",
+                "error_description": "Only client_credentials is supported",
+            },
+        )
+    if not verify_client(settings, client_id.strip(), client_secret):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "invalid_client",
+                "error_description": "Invalid client credentials",
+            },
+            headers={"WWW-Authenticate": 'Bearer error="invalid_client"'},
+        )
+    token, expires_in = create_access_token(settings, client_id.strip())
+    return TokenResponse(access_token=token, expires_in=expires_in)
+
+
+@app.get(
+    "/machines",
+    response_model=list[MachineProfile],
+    dependencies=[Depends(require_access_token)],
+    openapi_extra={"security": _OAUTH_SECURITY},
+)
 @limiter.limit(_RL_MACHINES)
 def list_machines(request: Request) -> list[MachineProfile]:
     """List Cura machine definitions found under CURA_ENGINE_SEARCH_PATH."""
@@ -75,7 +180,12 @@ def list_machines(request: Request) -> list[MachineProfile]:
     ]
 
 
-@app.post("/estimate", response_model=EstimateResponse)
+@app.post(
+    "/estimate",
+    response_model=EstimateResponse,
+    dependencies=[Depends(require_access_token)],
+    openapi_extra={"security": _OAUTH_SECURITY},
+)
 @limiter.limit(_RL_ESTIMATE)
 async def estimate(
     request: Request,
