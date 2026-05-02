@@ -5,13 +5,45 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from app.machines import list_machine_profiles
 from app.slicer_service import estimate_print, supported_materials
 
+
+def _client_ip(request: Request) -> str:
+    """Client id for rate limits; first hop in X-Forwarded-For when behind a proxy."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return get_remote_address(request)
+
+
+_RL_ENABLED = os.getenv("API_RATE_LIMIT_ENABLED", "true").lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+
+limiter = Limiter(
+    key_func=_client_ip,
+    # FastAPI often returns plain dict/models from handlers; slowapi would break
+    # injecting headers into those. 429 responses still use JSONResponse + headers.
+    headers_enabled=False,
+    enabled=_RL_ENABLED,
+)
+
 app = FastAPI(title="Slicer estimate API", version="1.0.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+_RL_MACHINES = os.getenv("API_RATE_LIMIT_MACHINES", "60/minute")
+_RL_ESTIMATE = os.getenv("API_RATE_LIMIT_ESTIMATE", "15/minute")
 
 _ALLOWED_EXT = frozenset({".stl", ".obj"})
 
@@ -28,12 +60,14 @@ class MachineProfile(BaseModel):
 
 
 @app.get("/health")
+@limiter.exempt
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.get("/machines", response_model=list[MachineProfile])
-def list_machines() -> list[MachineProfile]:
+@limiter.limit(_RL_MACHINES)
+def list_machines(request: Request) -> list[MachineProfile]:
     """List Cura machine definitions found under CURA_ENGINE_SEARCH_PATH."""
     return [
         MachineProfile(id=p["id"], name=p["name"])
@@ -42,7 +76,9 @@ def list_machines() -> list[MachineProfile]:
 
 
 @app.post("/estimate", response_model=EstimateResponse)
+@limiter.limit(_RL_ESTIMATE)
 async def estimate(
+    request: Request,
     source: UploadFile = File(..., description="STL or OBJ model"),
     material: str = Form(..., description="One of: " + ", ".join(supported_materials())),
     machine: str | None = Form(
