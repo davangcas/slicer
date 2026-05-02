@@ -16,13 +16,13 @@ API HTTP en **FastAPI** que estima **tiempo de impresión** (horas y minutos) y 
 
    `docker-compose.yml` carga `.env` si existe (`required: false`).
 
-2. Arranca el servicio (puerto **8050**).
+2. Arranca el servicio (puerto **8040**).
 
    ```bash
    docker compose up --build
    ```
 
-3. Documentación interactiva: [http://localhost:8050/docs](http://localhost:8050/docs)
+3. Documentación interactiva: [http://localhost:8040/docs](http://localhost:8040/docs)
 
 ## Endpoints
 
@@ -53,11 +53,11 @@ Los gramos se calculan a partir del volumen de filamento que reporta CuraEngine 
 ### Ejemplos con `curl`
 
 ```bash
-curl -sS http://localhost:8050/machines | head
+curl -sS http://localhost:8040/machines | head
 
-curl -sS -F "source=@test_cube.stl" -F "material=PLA" http://localhost:8050/estimate
+curl -sS -F "source=@test_cube.stl" -F "material=PLA" http://localhost:8040/estimate
 
-curl -sS -F "source=@test_cube.stl" -F "material=PLA" -F "machine=ultimaker2" http://localhost:8050/estimate
+curl -sS -F "source=@test_cube.stl" -F "material=PLA" -F "machine=ultimaker2" http://localhost:8040/estimate
 ```
 
 ## Variables de entorno

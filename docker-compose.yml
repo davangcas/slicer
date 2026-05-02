@@ -2,7 +2,7 @@ services:
   api:
     build: .
     ports:
-      - "8050:8050"
+      - "8040:8040"
     env_file:
       - path: .env
         required: false

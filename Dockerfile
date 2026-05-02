@@ -34,6 +34,6 @@ ENV PATH=/opt/venv/bin:$PATH
 ENV CURA_ENGINE_SEARCH_PATH=/opt/cura/resources:/usr/share/cura/resources
 ENV CURA_MACHINE_DEF=/opt/cura/resources/definitions/prusa_i3.def.json
 
-EXPOSE 8050
+EXPOSE 8040
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8050"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8040"]
