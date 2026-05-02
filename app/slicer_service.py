@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import os
 import re
 import shutil
@@ -8,6 +7,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Final
+
+from app.machines import resolve_definition_json
 
 # Density g/cm³ for mass from extruded volume (mm³): grams = mm³ * density / 1000
 _MATERIAL_DENSITY: Final[dict[str, float]] = {
@@ -51,10 +52,6 @@ _PRINT_TIME_S = re.compile(r"Print time \(s\):\s*(\d+)")
 _FILAMENT_MM3 = re.compile(r"Filament \(mm\^3\):\s*([\d.]+)")
 
 _CURA_ENGINE = os.environ.get("CURA_ENGINE_BIN", "CuraEngine")
-_DEFINITION = os.environ.get(
-    "CURA_MACHINE_DEF",
-    "/opt/cura/resources/definitions/prusa_i3.def.json",
-)
 _SEARCH_PATH = os.environ.get(
     "CURA_ENGINE_SEARCH_PATH",
     "/opt/cura/resources:/usr/share/cura/resources",
@@ -100,10 +97,14 @@ def estimate_print(
     source_path: Path,
     material: str,
     *,
+    machine_id: str | None = None,
     timeout_sec: float | None = None,
 ) -> tuple[int, int, float]:
     """
     Run CuraEngine and return (hours, minutes, grams).
+
+    ``machine_id`` is the definition stem (e.g. ``prusa_i3``); if omitted,
+    ``CURA_MACHINE_DEF`` from the environment is used.
     """
     key = material.strip().upper()
     if key not in _MATERIAL_DENSITY:
@@ -118,6 +119,8 @@ def estimate_print(
     timeout = timeout_sec
     if timeout is None:
         timeout = float(os.environ.get("SLICE_TIMEOUT", "600"))
+
+    definition_json = resolve_definition_json(machine_id)
 
     with tempfile.TemporaryDirectory(prefix="slice_") as tmp:
         tmp_path = Path(tmp)
@@ -135,7 +138,7 @@ def estimate_print(
             "-v",
             "-p",
             "-j",
-            _DEFINITION,
+            str(definition_json),
             "-s",
             "layer_height=0.2",
             "-s",

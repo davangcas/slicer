@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from app.machines import list_machine_profiles
 from app.slicer_service import estimate_print, supported_materials
 
 app = FastAPI(title="Slicer estimate API", version="1.0.0")
@@ -21,15 +22,33 @@ class EstimateResponse(BaseModel):
     grams: float = Field(ge=0, description="Estimated filament mass in grams")
 
 
+class MachineProfile(BaseModel):
+    id: str = Field(description="Machine definition id (stem of the Cura .def.json)")
+    name: str = Field(description="Human-readable printer name from the definition")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/machines", response_model=list[MachineProfile])
+def list_machines() -> list[MachineProfile]:
+    """List Cura machine definitions found under CURA_ENGINE_SEARCH_PATH."""
+    return [
+        MachineProfile(id=p["id"], name=p["name"])
+        for p in list_machine_profiles()
+    ]
 
 
 @app.post("/estimate", response_model=EstimateResponse)
 async def estimate(
     source: UploadFile = File(..., description="STL or OBJ model"),
     material: str = Form(..., description="One of: " + ", ".join(supported_materials())),
+    machine: str | None = Form(
+        None,
+        description="Machine id from GET /machines (e.g. prusa_i3). Omit to use CURA_MACHINE_DEF.",
+    ),
 ) -> EstimateResponse:
     filename = source.filename or "model"
     ext = Path(filename).suffix.lower()
@@ -52,7 +71,8 @@ async def estimate(
             if not content:
                 raise HTTPException(status_code=422, detail="Empty file")
             dest.write_bytes(content)
-            hours, minutes, grams = estimate_print(dest, mat)
+            mid = machine.strip() if machine and machine.strip() else None
+            hours, minutes, grams = estimate_print(dest, mat, machine_id=mid)
     except HTTPException:
         raise
     except ValueError as e:
