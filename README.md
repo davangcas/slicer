@@ -66,6 +66,7 @@ En **OpenAPI** (`/docs`) aparece el esquema *OAuth2ClientCredentials* para autor
   - `source` (archivo): extensión `.stl` o `.obj` (sin distinguir mayúsculas).
   - `material` (texto): uno de **PLA**, **PETG**, **ABS**, **ASA**, **TPU**.
   - `machine` (texto, opcional): `id` devuelto por `GET /machines`. Si se omite, se usa la ruta de **`CURA_MACHINE_DEF`**.
+  - `speed` (número, opcional): velocidad en **mm/s** aplicada de forma coherente a los principales ajustes Cura `speed_*` (muros, relleno, desplazamiento, etc.); con `speed` se fija además `cool_min_layer_time=0` para que el tiempo de capa no quede acotado por el mínimo de refrigeración. Si se omite, se usan por completo las velocidades del perfil.
 
 **Respuesta** (`application/json`):
 
@@ -85,6 +86,8 @@ curl -sS http://localhost:8050/machines | head
 curl -sS -F "source=@test_cube.stl" -F "material=PLA" http://localhost:8050/estimate
 
 curl -sS -F "source=@test_cube.stl" -F "material=PLA" -F "machine=ultimaker2" http://localhost:8050/estimate
+
+curl -sS -F "source=@test_cube.stl" -F "material=PLA" -F "speed=60" http://localhost:8050/estimate
 ```
 
 ## Variables de entorno

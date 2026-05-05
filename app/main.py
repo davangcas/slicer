@@ -195,6 +195,13 @@ async def estimate(
         None,
         description="Machine id from GET /machines (e.g. prusa_i3). Omit to use CURA_MACHINE_DEF.",
     ),
+    speed: float | None = Form(
+        None,
+        description=(
+            "Optional print speed in mm/s: sets main Cura speed_* settings and "
+            "disables min layer time for cooling; omit to use the machine profile as-is."
+        ),
+    ),
 ) -> EstimateResponse:
     filename = source.filename or "model"
     ext = Path(filename).suffix.lower()
@@ -218,7 +225,12 @@ async def estimate(
                 raise HTTPException(status_code=422, detail="Empty file")
             dest.write_bytes(content)
             mid = machine.strip() if machine and machine.strip() else None
-            hours, minutes, grams = estimate_print(dest, mat, machine_id=mid)
+            hours, minutes, grams = estimate_print(
+                dest,
+                mat,
+                machine_id=mid,
+                print_speed_mm_s=speed,
+            )
     except HTTPException:
         raise
     except ValueError as e:

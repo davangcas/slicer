@@ -57,6 +57,54 @@ _SEARCH_PATH = os.environ.get(
     "/opt/cura/resources:/usr/share/cura/resources",
 )
 
+_MIN_PRINT_SPEED_MM_S: Final[float] = 1.0
+_MAX_PRINT_SPEED_MM_S: Final[float] = 500.0
+
+# When the user sets print speed, Cura profiles still carry explicit mm/s for walls,
+# infill, etc., so a lone speed_print override does not change the estimate. We set a
+# coherent set of speed_* keys. cool_min_layer_time is set to 0 so small layers are
+# not stretched to the cooling minimum (which also masked speed differences).
+_USER_SPEED_SYNC_KEYS: Final[tuple[str, ...]] = (
+    "speed_print",
+    "speed_infill",
+    "speed_wall",
+    "speed_wall_0",
+    "speed_wall_x",
+    "speed_topbottom",
+    "speed_roofing",
+    "speed_layer_0",
+    "speed_print_layer_0",
+    "speed_support",
+    "speed_support_infill",
+    "speed_support_interface",
+    "speed_support_bottom",
+    "speed_support_roof",
+    "speed_prime_tower",
+    "skirt_brim_speed",
+    "speed_ironing",
+)
+
+
+def _format_speed_mm_s_for_cura(mm_s: float) -> str:
+    """Stable string for CuraEngine -s key=value (speeds in mm/s)."""
+    if mm_s == int(mm_s):
+        return str(int(mm_s))
+    return f"{mm_s:.6g}"
+
+
+def _scaled_travel_speed_mm_s(print_speed_mm_s: float) -> float:
+    """Travel usually faster than print; scale for estimates without clamping too low."""
+    return min(max(print_speed_mm_s * 3.0, 100.0), _MAX_PRINT_SPEED_MM_S)
+
+
+def _user_print_speed_cura_overrides(mm_s: float) -> list[tuple[str, str]]:
+    v = _format_speed_mm_s_for_cura(mm_s)
+    tr = _format_speed_mm_s_for_cura(_scaled_travel_speed_mm_s(mm_s))
+    pairs: list[tuple[str, str]] = [(k, v) for k in _USER_SPEED_SYNC_KEYS]
+    pairs.append(("speed_travel", tr))
+    pairs.append(("cool_min_layer_time", "0"))
+    return pairs
+
 
 def supported_materials() -> list[str]:
     return sorted(_MATERIAL_DENSITY.keys())
@@ -98,6 +146,7 @@ def estimate_print(
     material: str,
     *,
     machine_id: str | None = None,
+    print_speed_mm_s: float | None = None,
     timeout_sec: float | None = None,
 ) -> tuple[int, int, float]:
     """
@@ -105,7 +154,20 @@ def estimate_print(
 
     ``machine_id`` is the definition stem (e.g. ``prusa_i3``); if omitted,
     ``CURA_MACHINE_DEF`` from the environment is used.
+
+    ``print_speed_mm_s`` applies a consistent set of Cura ``speed_*`` settings
+    (not only ``speed_print``) plus ``cool_min_layer_time=0``; if omitted,
+    the machine profile defaults apply unchanged.
     """
+    if print_speed_mm_s is not None:
+        if not (
+            _MIN_PRINT_SPEED_MM_S <= print_speed_mm_s <= _MAX_PRINT_SPEED_MM_S
+        ):
+            raise ValueError(
+                "print speed must be between "
+                f"{_MIN_PRINT_SPEED_MM_S:g} and {_MAX_PRINT_SPEED_MM_S:g} mm/s"
+            )
+
     key = material.strip().upper()
     if key not in _MATERIAL_DENSITY:
         raise ValueError(f"Unsupported material: {material!r}")
@@ -148,6 +210,9 @@ def estimate_print(
         ]
         for setting_key, value in cura_overrides.items():
             argv.extend(["-s", f"{setting_key}={value}"])
+        if print_speed_mm_s is not None:
+            for sk, sv in _user_print_speed_cura_overrides(print_speed_mm_s):
+                argv.extend(["-s", f"{sk}={sv}"])
         argv.extend(["-l", str(model_for_cura), "-o", str(out_gcode)])
 
         env = os.environ.copy()
